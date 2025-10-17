@@ -40,8 +40,8 @@ st.title("Flood Inundation Mapper — DEM + River → Flood Polygons")
 
 with st.sidebar:
     st.header("Inputs")
-    dem_file = st.file_uploader("Upload DEM (GeoTIFF, .asc, NetCDF...)", type=["tif","tiff","asc","nc","grd"])
-    river_file = st.file_uploader("Upload river vector (shp as zip or geojson)", type=["zip","geojson"])
+    dem_file = st.file_uploader("Upload DEM (GeoTIFF, .asc, NetCDF...)", type=["tif", "tiff", "asc", "nc", "grd"])
+    river_file = st.file_uploader("Upload river vector (shp as zip or geojson)", type=["zip", "geojson"])
     levels_input = st.text_input("Water levels (m) — comma separated", value=",".join(map(str, DEFAULT_LEVELS)))
     run_button = st.button("Run inundation analysis")
 
@@ -131,6 +131,9 @@ def mpl_color_to_hex(c):
     return matplotlib.colors.to_hex(c)
 
 
+# =========================
+# MAIN PROCESSING SECTION
+# =========================
 if run_button:
     if dem_file is None or river_file is None:
         st.error("Please upload both a DEM and a river vector file.")
@@ -185,7 +188,7 @@ if run_button:
             if valid_gdfs:
                 all_polys = gpd.GeoDataFrame(pd.concat(valid_gdfs, ignore_index=True), crs=crs)
             else:
-                all_polys = gpd.GeoDataFrame(columns=['geometry','level_m'], geometry='geometry', crs=crs)
+                all_polys = gpd.GeoDataFrame(columns=['geometry', 'level_m'], geometry='geometry', crs=crs)
 
             out_gpkg = os.path.join(tmpdir, 'flood_inundation.gpkg')
             if not all_polys.empty:
@@ -204,7 +207,7 @@ if run_button:
 
             try:
                 bounds = river_gdf.to_crs(epsg=4326).total_bounds
-                center = [(bounds[1]+bounds[3])/2, (bounds[0]+bounds[2])/2]
+                center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
             except Exception:
                 center = [0, 0]
 
@@ -215,10 +218,21 @@ if run_button:
                 if gdf is None or gdf.empty:
                     continue
                 hexc = mpl_color_to_hex(colormap.get(lvl))
-                folium.GeoJson(gdf.to_crs(epsg=4326), name=f'Flood {lvl} m', style_function=lambda feat, hexc=hexc: {'fillColor': hexc, 'color': hexc, 'weight': 0.5, 'fillOpacity': 0.5}).add_to(m)
+                folium.GeoJson(
+                    gdf.to_crs(epsg=4326),
+                    name=f'Flood {lvl} m',
+                    style_function=lambda feat, hexc=hexc: {
+                        'fillColor': hexc,
+                        'color': hexc,
+                        'weight': 0.5,
+                        'fillOpacity': 0.5
+                    }
+                ).add_to(m)
 
             folium.LayerControl().add_to(m)
-            st_folium(m, width=900)
+
+            # ✅ FIX: Keep map visible persistently
+            st.session_state['flood_map'] = m
 
             if not all_polys.empty:
                 with open(out_gpkg, 'rb') as f:
@@ -227,6 +241,10 @@ if run_button:
                     st.download_button('Download zipped Shapefile', f.read(), file_name='flood_inundation_shp.zip')
             else:
                 st.info('No inundation polygons produced for the given levels (no DEM cells below levels connected to river).')
+
+# ✅ Always show map if available (persistent visibility)
+if 'flood_map' in st.session_state:
+    st_folium(st.session_state['flood_map'], width=900, key="flood_map_display")
 
 st.markdown("""
 ### Notes & Tips
