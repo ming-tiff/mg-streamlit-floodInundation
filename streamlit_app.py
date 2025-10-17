@@ -148,6 +148,8 @@ if run_button:
                 all_polys = gpd.GeoDataFrame(columns=['geometry', 'level_m'], geometry='geometry', crs=crs)
 
             out_gpkg = os.path.join(tmpdir, 'flood_inundation.gpkg')
+            zip_path = None  # ✅ ensure variable exists to avoid NameError
+
             if not all_polys.empty:
                 all_polys.to_file(out_gpkg, driver='GPKG', layer='flood_inundation')
                 shp_dir = os.path.join(tmpdir, 'shp_out')
