@@ -1,20 +1,5 @@
 """
 Streamlit app: Flood inundation mapping from DEM + river vector
-- Supports DEM in GeoTIFF / ASCII grid (.asc) / NetCDF (with z variable) / other GDAL-readable rasters
-- Accepts river vector as Shapefile (.shp + .shx + .dbf) or GeoJSON
-- Computes inundation polygons for a set of water levels (default: 0.1, 0.3, 0.5, 1.0, 1.5 m)
-- Keeps only flood extents hydraulically connected to the river (connectivity by pixel)
-- Produces styled map preview and downloads: GeoPackage (.gpkg) and zipped ESRI Shapefile
-
-Dependencies:
-pip install rasterio geopandas fiona numpy scipy shapely rasterio[xarray] xarray rioxarray streamlit streamlit_folium folium matplotlib pyproj pandas
-
-Run:
-streamlit run flood_inundation_streamlit_app.py
-
-Notes:
-- Sentinel-1 imagery is SAR backscatter and is NOT a DEM. To use Sentinel-1 you must derive or provide a DEM first (e.g., from SRTM, TanDEM-X, or copernicus DEM).
-- This is a simple static water-level inundation (bathtub) model with connectivity to river; it does NOT perform hydraulic routing (no 1D/2D flow simulation). For hydraulic modeling use HEC-RAS, LISFLOOD-FP, or 2D hydrodynamic models.
 """
 
 import streamlit as st
@@ -45,11 +30,12 @@ with st.sidebar:
     levels_input = st.text_input("Water levels (m) — comma separated", value=",".join(map(str, DEFAULT_LEVELS)))
     run_button = st.button("Run inundation analysis")
 
-
+# =========================
+# Utility functions
+# =========================
 def save_uploaded_file(uploaded, dest_path):
     with open(dest_path, 'wb') as f:
         f.write(uploaded.getbuffer())
-
 
 def read_raster_from_fileobj(path):
     src = rasterio.open(path)
@@ -59,28 +45,18 @@ def read_raster_from_fileobj(path):
     nodata = src.nodata
     return arr, transform, crs, nodata
 
-
 def extract_shapefile_from_zip(zip_path, extract_dir):
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_dir)
-    # find first .shp file
-    shp_files = []
-    for root, dirs, files in os.walk(extract_dir):
-        for f in files:
-            if f.lower().endswith('.shp'):
-                shp_files.append(os.path.join(root, f))
+    shp_files = [os.path.join(root, f)
+                 for root, _, files in os.walk(extract_dir)
+                 for f in files if f.lower().endswith('.shp')]
     if not shp_files:
         raise ValueError('No .shp file found in uploaded ZIP.')
     return shp_files[0]
 
-
 def read_river_vector(path_or_dir):
-    try:
-        gdf = gpd.read_file(path_or_dir)
-        return gdf
-    except Exception as e:
-        raise e
-
+    return gpd.read_file(path_or_dir)
 
 def rasterize_geometry_mask(geoms, out_shape, transform):
     import rasterio.features
@@ -88,19 +64,16 @@ def rasterize_geometry_mask(geoms, out_shape, transform):
     mask = rasterio.features.rasterize(shapes_gen, out_shape=out_shape, transform=transform, fill=0, dtype='uint8')
     return mask.astype(bool)
 
-
 def compute_connected_inundation(dem, river_mask, transform, level):
     flooded_candidate = (dem <= level) & (~np.isnan(dem))
     if not flooded_candidate.any():
         return np.zeros(dem.shape, dtype=bool)
-    structure = np.ones((3, 3), dtype=int)  # 8-connectivity fix for NumPy >=1.24
+    structure = np.ones((3, 3), dtype=int)
     labeled, ncomp = ndimage.label(flooded_candidate, structure=structure)
     river_labels = np.unique(labeled[river_mask & (labeled > 0)])
     if len(river_labels) == 0:
         return np.zeros(dem.shape, dtype=bool)
-    connected_mask = np.isin(labeled, river_labels)
-    return connected_mask
-
+    return np.isin(labeled, river_labels)
 
 def mask_to_polygons(mask, transform, crs, min_area_m2=1.0):
     results = []
@@ -112,12 +85,10 @@ def mask_to_polygons(mask, transform, crs, min_area_m2=1.0):
     if not results:
         return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs=crs)
     gdf = gpd.GeoDataFrame(geometry=results, crs=crs)
-    gdf = gdf.dissolve(by=lambda x: 0)
-    gdf = gdf.explode(ignore_index=True)
+    gdf = gdf.dissolve(by=lambda x: 0).explode(ignore_index=True)
     if 'geometry' in gdf:
         gdf = gdf[gdf.geometry.area >= min_area_m2]
     return gdf
-
 
 def create_colormap(levels):
     cmap = plt.get_cmap('Blues')
@@ -125,15 +96,14 @@ def create_colormap(levels):
     colors = [plt.cm.Blues(0.4 + 0.5*i/(n-1)) for i in range(n)] if n > 1 else [plt.cm.Blues(0.6)]
     return {lvl: colors[i] for i, lvl in enumerate(sorted(levels))}
 
-
 def mpl_color_to_hex(c):
     import matplotlib
     return matplotlib.colors.to_hex(c)
 
-
 # =========================
 # MAIN PROCESSING SECTION
 # =========================
+
 if run_button:
     if dem_file is None or river_file is None:
         st.error("Please upload both a DEM and a river vector file.")
@@ -154,23 +124,10 @@ if run_button:
             else:
                 river_read_path = river_path
 
-            try:
-                dem_arr, transform, crs, nodata = read_raster_from_fileobj(dem_path)
-            except Exception as e:
-                st.exception(e)
-                st.stop()
+            dem_arr, transform, crs, nodata = read_raster_from_fileobj(dem_path)
+            river_gdf = read_river_vector(river_read_path)
 
-            try:
-                river_gdf = read_river_vector(river_read_path)
-            except Exception as e:
-                st.exception(e)
-                st.stop()
-
-            try:
-                levels = [float(x.strip()) for x in levels_input.split(',') if x.strip() != '']
-            except Exception:
-                st.error('Invalid water levels input. Use comma separated numbers (e.g. 0.1,0.3,0.5)')
-                st.stop()
+            levels = [float(x.strip()) for x in levels_input.split(',') if x.strip() != '']
 
             out_shape = dem_arr.shape
             river_mask = rasterize_geometry_mask(river_gdf.geometry, out_shape, transform)
@@ -197,7 +154,6 @@ if run_button:
                 os.makedirs(shp_dir, exist_ok=True)
                 shp_base = os.path.join(shp_dir, 'flood_inundation.shp')
                 all_polys.to_file(shp_base, driver='ESRI Shapefile')
-
                 zip_path = os.path.join(tmpdir, 'flood_shapefile.zip')
                 with zipfile.ZipFile(zip_path, 'w') as zf:
                     for fname in os.listdir(shp_dir):
@@ -205,9 +161,10 @@ if run_button:
 
             st.success('Processing finished.')
 
+            # Create folium map
             try:
                 bounds = river_gdf.to_crs(epsg=4326).total_bounds
-                center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
+                center = [(bounds[1]+bounds[3])/2, (bounds[0]+bounds[2])/2]
             except Exception:
                 center = [0, 0]
 
@@ -222,29 +179,26 @@ if run_button:
                     gdf.to_crs(epsg=4326),
                     name=f'Flood {lvl} m',
                     style_function=lambda feat, hexc=hexc: {
-                        'fillColor': hexc,
-                        'color': hexc,
-                        'weight': 0.5,
-                        'fillOpacity': 0.5
+                        'fillColor': hexc, 'color': hexc, 'weight': 0.5, 'fillOpacity': 0.5
                     }
                 ).add_to(m)
-
             folium.LayerControl().add_to(m)
 
-            # ✅ FIX: Keep map visible persistently
+            # ✅ Persist map & results
             st.session_state['flood_map'] = m
+            st.session_state['gpkg_data'] = out_gpkg
+            st.session_state['zip_data'] = zip_path
+            st.session_state['analysis_done'] = True
 
-            if not all_polys.empty:
-                with open(out_gpkg, 'rb') as f:
-                    st.download_button('Download GeoPackage (.gpkg)', f.read(), file_name='flood_inundation.gpkg')
-                with open(zip_path, 'rb') as f:
-                    st.download_button('Download zipped Shapefile', f.read(), file_name='flood_inundation_shp.zip')
-            else:
-                st.info('No inundation polygons produced for the given levels (no DEM cells below levels connected to river).')
-
-# ✅ Always show map if available (persistent visibility)
-if 'flood_map' in st.session_state:
+# ✅ Show map & downloads persistently (even after rerun)
+if st.session_state.get('analysis_done') and 'flood_map' in st.session_state:
     st_folium(st.session_state['flood_map'], width=900, key="flood_map_display")
+
+    with open(st.session_state['gpkg_data'], 'rb') as f:
+        st.download_button('Download GeoPackage (.gpkg)', f.read(), file_name='flood_inundation.gpkg')
+
+    with open(st.session_state['zip_data'], 'rb') as f:
+        st.download_button('Download zipped Shapefile', f.read(), file_name='flood_inundation_shp.zip')
 
 st.markdown("""
 ### Notes & Tips
