@@ -124,6 +124,19 @@ if run_button:
             else:
                 river_read_path = river_path
 
+# =========================
+# MAIN PROCESSING SECTION
+# =========================
+
+    zip_path = None  # ✅ define globally to persist through reruns
+
+    if run_button:
+        if dem_file is None or river_file is None:
+            st.error("Please upload both a DEM and a river vector file.")
+        else:
+            with st.spinner('Processing...'):
+                ...
+
             dem_arr, transform, crs, nodata = read_raster_from_fileobj(dem_path)
             river_gdf = read_river_vector(river_read_path)
 
